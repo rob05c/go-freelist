@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rob05c/go-freelist/lru" // vendored from github.com/apache/trafficontrol
+	"github.com/apache/trafficcontrol/grove/lru"
 
 	"github.com/rob05c/go-freelist"
 )
