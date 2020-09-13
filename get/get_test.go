@@ -12,14 +12,12 @@ import (
 
 var BytesPerKibibyte = 1024
 var BytesPerMebibyte = 1024 * BytesPerKibibyte
-var FreeListSizeBytes = 100 * BytesPerMebibyte
-var FreeListBlockSize = 5
 var RequestTimeout = time.Second * 5
 
 func TestSimpleFetch(t *testing.T) {
-	t.Log("\n\ntestSimpleFetch\n-------")
-
-	cache := cache.New(uint64(FreeListSizeBytes), uint64(FreeListBlockSize))
+	blockSize := 5
+	sizeBytes := 100 * BytesPerMebibyte
+	cache := cache.New(uint64(sizeBytes), uint64(blockSize))
 
 	getter := NewGetter(cache)
 
@@ -44,19 +42,19 @@ func TestSimpleFetch(t *testing.T) {
 		t.Fatal("first get: reading: " + err.Error())
 	}
 	reader.Close() // close immediately, don't defer, so the second read finishes. Close should be safe for multiple calls
-	t.Logf(`First read got:
-time:	%v
-code:	%v
-cached:	%v
-blen:	%v
-bhead:	'%v'
+	// 	t.Logf(`First read got:
+	// time:	%v
+	// code:	%v
+	// cached:	%v
+	// blen:	%v
+	// bhead:	'%v'
 
-`, metaData.ReqTime,
-		metaData.Code,
-		wasCached,
-		len(bts),
-		string(bts[:10]),
-	)
+	// `, metaData.ReqTime,
+	// 		metaData.Code,
+	// 		wasCached,
+	// 		len(bts),
+	// 		string(bts[:10]),
+	// 	)
 
 	reader2, metaData2, wasCached2, err := getter.Get(cacheKey, getFunc)
 	if err != nil {
@@ -69,19 +67,19 @@ bhead:	'%v'
 		t.Fatal("second get: reading: " + err.Error())
 	}
 	reader2.Close() // close immediately, don't defer, so the second read finishes. Close should be safe for multiple calls
-	t.Logf(`Second read got:
-time:	%v
-code:	%v
-cached:	%v
-blen:	%v
-bhead:	'%v'
+	// 	t.Logf(`Second read got:
+	// time:	%v
+	// code:	%v
+	// cached:	%v
+	// blen:	%v
+	// bhead:	'%v'
 
-`, metaData2.ReqTime,
-		metaData2.Code,
-		wasCached2,
-		len(bts2),
-		string(bts2[:10]),
-	)
+	// `, metaData2.ReqTime,
+	// 		metaData2.Code,
+	// 		wasCached2,
+	// 		len(bts2),
+	// 		string(bts2[:10]),
+	// 	)
 
 	btsStr := string(bts)
 	bts2Str := string(bts2)
@@ -100,10 +98,9 @@ bhead:	'%v'
 }
 
 func TestInterleavedRead(t *testing.T) {
-	t.Log("\n\ntestInterleavedRead\n-------")
-
-	cache := cache.New(uint64(FreeListSizeBytes), uint64(FreeListBlockSize))
-	cache = cache
+	blockSize := 5
+	sizeBytes := 100 * BytesPerMebibyte
+	cache := cache.New(uint64(sizeBytes), uint64(blockSize))
 
 	getter := NewGetter(cache)
 
@@ -124,15 +121,22 @@ func TestInterleavedRead(t *testing.T) {
 	}
 	defer reader.Close()
 
-	t.Logf(`First read got:
-time:	%v
-code:	%v
-cached:	%v
+	if metaData.Code != 200 {
+		t.Errorf("Expected first read code %v to be 200", metaData.Code)
+	}
+	if wasCached {
+		t.Errorf("Expected first read to not be cached")
+	}
 
-`, metaData.ReqTime,
-		metaData.Code,
-		wasCached,
-	)
+	// 	t.Logf(`First read got:
+	// time:	%v
+	// code:	%v
+	// cached:	%v
+
+	// `, metaData.ReqTime,
+	// 		metaData.Code,
+	// 		wasCached,
+	// 	)
 
 	reader2, metaData2, wasCached2, err2 := getter.Get(cacheKey, getFunc)
 	if err2 != nil {
@@ -140,15 +144,22 @@ cached:	%v
 	}
 	defer reader2.Close()
 
-	t.Logf(`Second read got:
-time:	%v
-code:	%v
-cached:	%v
+	if metaData2.Code != 200 {
+		t.Errorf("Expected second read code %v to be 200", metaData2.Code)
+	}
+	if !wasCached2 {
+		t.Errorf("Expected second read to be cached")
+	}
 
-`, metaData2.ReqTime,
-		metaData2.Code,
-		wasCached2,
-	)
+	// 	t.Logf(`Second read got:
+	// time:	%v
+	// code:	%v
+	// cached:	%v
+
+	// `, metaData2.ReqTime,
+	// 		metaData2.Code,
+	// 		wasCached2,
+	// 	)
 
 	allReader := []byte{}
 	allReader2 := []byte{}
@@ -161,7 +172,7 @@ cached:	%v
 	if err != nil && err != io.EOF {
 		t.Fatal("read0: " + err.Error())
 	}
-	t.Logf("rea00 '%v'\n", string(buf[:n]))
+	// t.Logf("rea00 '%v'\n", string(buf[:n]))
 	allReader = append(allReader, buf[:n]...)
 
 	readerClosed := false
@@ -179,7 +190,7 @@ cached:	%v
 			}
 		}
 
-		t.Logf("read0 '%v'\n", string(buf[:n]))
+		// t.Logf("read0 '%v'\n", string(buf[:n]))
 
 		n, err = reader2.Read(buf2)
 		allReader2 = append(allReader2, buf2[:n]...)
@@ -188,7 +199,7 @@ cached:	%v
 			return
 		}
 
-		t.Logf("read2 '%v'\n", string(buf2[:n]))
+		// t.Logf("read2 '%v'\n", string(buf2[:n]))
 
 		if n == 0 || err == io.EOF {
 			break
@@ -200,8 +211,6 @@ cached:	%v
 	if allReaderStr != allReader2Str {
 		t.Errorf("expected first read '''%v''' to equal second read '''%v", allReaderStr, allReader2Str)
 	}
-	t.Log("read All0: '''" + string(allReader) + "'''")
-	t.Log("read All2: '''" + string(allReader2) + "'''")
-
-	t.Log("testInterleavedRead done")
+	// t.Log("read All0: '''" + string(allReader) + "'''")
+	// t.Log("read All2: '''" + string(allReader2) + "'''")
 }

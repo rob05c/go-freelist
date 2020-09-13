@@ -70,6 +70,7 @@ type GetterFunc func() (io.ReadCloser, *CacheObjMetaData, error)
 func (gt *Getter) Get(key string, get GetterFunc) (io.ReadCloser, *CacheObjMetaData, bool, error) {
 	// TODO consider changing to spawn a ReadAll in a goroutine? To avoid the "must read" scenario? Probably slower.
 
+	// TODO remove keylock, add/use atomic GetOrNew
 	iKeyLock, _ := gt.keyLocks.LoadOrStore(key, &sync.Mutex{})
 	keyLock := iKeyLock.(*sync.Mutex)
 	keyLock.Lock()

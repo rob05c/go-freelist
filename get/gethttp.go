@@ -2,7 +2,6 @@ package get
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -11,7 +10,6 @@ import (
 
 func GetHTTP(url string, client *http.Client) GetterFunc {
 	return func() (io.ReadCloser, *CacheObjMetaData, error) {
-		fmt.Println("DEBUG GetHTTP fetching from origin!")
 		reqTime := time.Now()
 		resp, err := client.Get(url) // TODO add cache, IMS, all that magic
 		respTime := time.Now()
@@ -36,11 +34,36 @@ func GetHTTP(url string, client *http.Client) GetterFunc {
 	}
 }
 
+func GetHTTPMockTxt(txt string) GetterFunc {
+	return func() (io.ReadCloser, *CacheObjMetaData, error) {
+		reqTime := time.Now()
+
+		respStatusCode := 200
+		respBody := ioutil.NopCloser(bytes.NewBufferString(txt))
+		respTime := time.Now()
+
+		// TODO add missing fields
+		md := &CacheObjMetaData{
+			// ReqHeaders: http.Header{}
+			// RespHeaders: resp.Header,
+			// RespCacheControl: web.CacheControl
+			Code:       respStatusCode, // TODO fix - what's the difference in this and OriginCode?
+			OriginCode: respStatusCode,
+			// ProxyURL         string
+			ReqTime:     reqTime,
+			ReqRespTime: respTime,
+			// RespRespTime:     time.Time // the origin server's Date time when the object was sent
+			// LastModified     time.Time // the origin LastModified if it exists, or Date if it doesn't
+			// Size             uint64
+		}
+		return respBody, md, nil
+	}
+}
+
 // GetHTTPMock pretends to get from HTTP, but actually returns the hard-coded body from example.com.
 // Exists for testing.
 func GetHTTPMock(url string, client *http.Client) GetterFunc {
 	return func() (io.ReadCloser, *CacheObjMetaData, error) {
-		fmt.Println("DEBUG GetHTTPMock fetching from origin! (not really)")
 		reqTime := time.Now()
 
 		respStatusCode := 200

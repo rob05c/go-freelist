@@ -3,6 +3,7 @@ package freelist
 import (
 	"errors"
 	"io"
+	"os"
 	"sync"
 	"time"
 )
@@ -158,8 +159,6 @@ func (bf *buffer) ReadWriterCount() int { return bf.readWriterCount }
 var ErrClosedBuffer = errors.New("freelist: write on closed Buffer")
 
 func (bf *buffer) Write(bts []byte) (int, error) {
-	//	fmt.Printf("DEBUG buffer.Write called with '%v'\n", string(bts))
-
 	bf.m.Lock()
 	defer bf.m.Unlock()
 
@@ -203,8 +202,6 @@ func (bf *buffer) Close() error {
 }
 
 func (bf *buffer) CloseWithError(err error) {
-	//	fmt.Printf("DEBUG buffer.CloseWithError called %v\n", err)
-
 	bf.m.Lock()
 	defer bf.m.Unlock()
 	if !bf.closed {
@@ -233,10 +230,27 @@ type reader struct {
 }
 
 func (rr *reader) Read(bts []byte) (int, error) {
-	//	fmt.Printf("DEBUG reader.Read called len(bts) %v\n", len(bts))
+	defer func() {
+		if r := recover(); r != nil {
+			// should never happen
+			// TODO print stacktrace
+			os.Exit(-1)
+		}
+	}()
+
 	if rr.closed {
-		//		fmt.Printf("DEBUG reader.Read initially closed, returning EOF\n")
 		return 0, io.EOF
+	}
+
+	// wait for the first write to allocate a block
+	for {
+		rr.bf.m.RLock()
+		lenBlocks := len(rr.bf.blocks)
+		rr.bf.m.RUnlock()
+		if lenBlocks > 0 {
+			break
+		}
+		time.Sleep(time.Millisecond * 10) // TODO change to a wakeup signal from Buffer.Write
 	}
 
 	totalBytesRead := 0
@@ -255,7 +269,6 @@ func (rr *reader) Read(bts []byte) (int, error) {
 		}
 
 		if err != nil {
-			//			fmt.Printf("DEBUG reader.Read error %v\n", err)
 			return totalBytesRead, err
 		}
 		rr.bfClosed = closed
@@ -282,8 +295,6 @@ func (rr *reader) Read(bts []byte) (int, error) {
 		blockBytes = blockBytes[startOffset:]
 
 		numBytesCopied := copy(bts, blockBytes)
-
-		//		fmt.Printf("DEBUG reader.Read copying '%v'\n", string(bts[:numBytesCopied]))
 
 		totalBytesRead += numBytesCopied
 		bts = bts[numBytesCopied:]
