@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"sync"
-	"time"
 )
 
 // FreeList implements a free list.
@@ -112,8 +111,11 @@ func (fl *freeList) getBlockBytes(blockIdx int) []byte {
 	return fl.bts[blockIdx*fl.blockSize : blockIdx*fl.blockSize+fl.blockSize]
 }
 
-func (fl *freeList) Size() int      { return len(fl.bts) }
-func (fl *freeList) BlockSize() int { return fl.blockSize }
+// Size returns the size of the FreeList in bytes. This is safe for calling by multiple goroutines.
+func (fl *freeList) Size() int { return len(fl.bts) } // threadsafe, fl.bts never changes after fl is created.
+
+// BlockSize returns the block size of the FreeList in bytes. This is safe for calling by multiple goroutines.
+func (fl *freeList) BlockSize() int { return fl.blockSize } // threadsafe, fl.blockSize never changes after fl is created.
 
 // Buffer is used to get FreeList bytes.
 // Readers may read concurrently with writes. Each concurrent readers will read from the start, and block after the end, until Close is called.
@@ -144,23 +146,41 @@ type buffer struct {
 	closed          bool
 	err             error
 	m               sync.RWMutex
+	// writeSignal is signals all goroutines waiting on it after a write occurs.
+	// This is useful to readers waiting on a new write.
+	// TODO add an option to use a sleep instead. For very high performance environments, like say a high-throughput HTTP caching proxy, a spinlock is likely faster.
+	// TODO benchmark signal vs spinlock (~10ms sleep)
+	writeSignal *sync.Cond
 }
 
 func (fl *freeList) NewBuffer() Buffer {
-	return &buffer{
+	buf := &buffer{
 		fl:              fl,
 		readWriterCount: 1,              // there is immediately 1 writer, until Close is called
 		lastBlockPos:    fl.BlockSize(), // start at blocksize, so the first write allocates a new block
 	}
+	buf.writeSignal = sync.NewCond(&buf.m)
+	return buf
 }
 
-func (bf *buffer) ReadWriterCount() int { return bf.readWriterCount }
+// ReadWriterCount returns the current number of readers and writers of the buffer.
+// This is safe for calling by multiple goroutines.
+func (bf *buffer) ReadWriterCount() int {
+	// bf.readWriterCount can be changed by other goroutines concurrently, so it must be locked before reading.
+	bf.m.RLock()
+	defer bf.m.RUnlock()
+	return bf.readWriterCount
+}
 
 var ErrClosedBuffer = errors.New("freelist: write on closed Buffer")
 
 func (bf *buffer) Write(bts []byte) (int, error) {
 	bf.m.Lock()
 	defer bf.m.Unlock()
+	// Always broadcast after attempting to write, regardless of success.
+	// If the buffer was closed and someone tried to write, they're probably also trying to read.
+	// If there's an error, we need to wake readers so they can return errors themselves.
+	defer bf.writeSignal.Broadcast()
 
 	if bf.closed {
 		return 0, ErrClosedBuffer
@@ -191,9 +211,12 @@ func (bf *buffer) Write(bts []byte) (int, error) {
 }
 
 // Close always returns a nil error.
+// Close is idempotent: it may be called multiple times without error.
 func (bf *buffer) Close() error {
 	bf.m.Lock()
 	defer bf.m.Unlock()
+	// send a write signal after closing, so readers wake up and return
+	defer bf.writeSignal.Broadcast()
 	if !bf.closed {
 		bf.closed = true
 		bf.readWriterCount--
@@ -243,15 +266,18 @@ func (rr *reader) Read(bts []byte) (int, error) {
 	}
 
 	// wait for the first write to allocate a block
+	rr.bf.m.Lock()
 	for {
-		rr.bf.m.RLock()
-		lenBlocks := len(rr.bf.blocks)
-		rr.bf.m.RUnlock()
-		if lenBlocks > 0 {
+		if len(rr.bf.blocks) > 0 {
 			break
 		}
-		time.Sleep(time.Millisecond * 10) // TODO change to a wakeup signal from Buffer.Write
+		if rr.closed {
+			rr.bf.m.Unlock()
+			return 0, io.EOF
+		}
+		rr.bf.writeSignal.Wait()
 	}
+	rr.bf.m.Unlock()
 
 	totalBytesRead := 0
 	for len(bts) > 0 {
@@ -274,14 +300,32 @@ func (rr *reader) Read(bts []byte) (int, error) {
 		rr.bfClosed = closed
 
 		onLastBlock := nextBufferBlockI == lenBlocks-1
-		// if we're on the last block, sleep until either a new whole block is written, or Close() is called.
+
+		// if we're on the last block, wait until either a new whole block is written, or Close() is called.
 		if onLastBlock && !rr.bfClosed {
-			time.Sleep(time.Millisecond * 10) // TODO change to a wakeup signal from Buffer.Write
-			continue
+			rr.bf.m.Lock()
+			for {
+				if err := rr.bf.err; err != nil {
+					rr.bf.m.Unlock()
+					return totalBytesRead, err
+				}
+
+				nextBlockI = rr.bf.blocks[nextBufferBlockI]
+				lenBlocks = len(rr.bf.blocks)
+				rr.bfClosed = rr.bf.closed
+				onLastBlock = nextBufferBlockI == lenBlocks-1
+
+				if !onLastBlock || rr.bfClosed {
+					break
+				}
+				rr.bf.writeSignal.Wait()
+			}
+			rr.bf.m.Unlock()
 		}
 
 		blockLen := rr.bf.fl.BlockSize() // we only read full blocks, until Close() is called
 
+		// at this point, onLastBlock => rr.bfClosed => rr.bf.closed
 		if onLastBlock {
 			// note we don't mutex - once the buffer is closed to writes, mutexing is never required again
 			blockLen = rr.bf.lastBlockPos
